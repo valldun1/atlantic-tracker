@@ -21,11 +21,12 @@ logger = logging.getLogger(__name__)
 
 # --- ENV ---
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
-PASSWORD = os.environ["PASSWORD"]
+PASSWORD_KOSTYA = os.environ["PASSWORD_KOSTYA"]
+PASSWORD_YURA = os.environ["PASSWORD_YURA"]
 GOOGLE_CREDENTIALS_JSON = os.environ["GOOGLE_CREDENTIALS_JSON"]
 
-# --- Авторизованные сессии (в памяти) ---
-authorized_users: set[int] = set()
+# --- Сессии: user_id → captain name ---
+authorized_users: dict[int, str] = {}
 
 # --- Google Sheets ---
 def get_sheet():
@@ -39,10 +40,10 @@ def get_sheet():
     spreadsheet = client.open("Atlantic Tracker")
     return spreadsheet.worksheet("track")
 
-def append_point(lat: float, lon: float):
+def append_point(lat: float, lon: float, captain: str):
     sheet = get_sheet()
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    sheet.append_row([timestamp, lat, lon])
+    sheet.append_row([timestamp, lat, lon, captain])
 
 # --- Клавиатура ---
 def geo_keyboard():
@@ -53,8 +54,9 @@ def geo_keyboard():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id in authorized_users:
+        captain = authorized_users[user_id]
         await update.message.reply_text(
-            "✅ Ты уже авторизован. Жми кнопку чтобы записать точку.",
+            f"✅ Ты уже авторизован как {captain}. Жми кнопку чтобы записать точку.",
             reply_markup=geo_keyboard(),
         )
     else:
@@ -65,18 +67,22 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
 
     if user_id in authorized_users:
-        # Уже авторизован — игнорируем текст
         await update.message.reply_text(
             "Нажми кнопку 📍 чтобы записать геопозицию.",
             reply_markup=geo_keyboard(),
         )
         return
 
-    # Проверка пароля
-    if text == PASSWORD:
-        authorized_users.add(user_id)
+    if text == PASSWORD_KOSTYA:
+        authorized_users[user_id] = "kostya"
         await update.message.reply_text(
-            "✅ Доступ открыт. Нажми кнопку чтобы записать точку.",
+            "✅ Добро пожаловать, Костя! Жми кнопку чтобы записать точку.",
+            reply_markup=geo_keyboard(),
+        )
+    elif text == PASSWORD_YURA:
+        authorized_users[user_id] = "yura"
+        await update.message.reply_text(
+            "✅ Добро пожаловать, Юра! Жми кнопку чтобы записать точку.",
             reply_markup=geo_keyboard(),
         )
     else:
@@ -92,9 +98,10 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
     location = update.message.location
     lat = location.latitude
     lon = location.longitude
+    captain = authorized_users[user_id]
 
     try:
-        append_point(lat, lon)
+        append_point(lat, lon, captain)
         await update.message.reply_text(
             f"✅ Точка записана\n📍 {lat:.5f}, {lon:.5f}",
             reply_markup=geo_keyboard(),
@@ -114,7 +121,7 @@ def main():
     app.add_handler(MessageHandler(filters.LOCATION, handle_location))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    logger.info("Atlantic Tracker bot started")
+    logger.info("Atlantic Tracker bot v2 started")
     app.run_polling()
 
 if __name__ == "__main__":
