@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Atlantic Sail — Трек</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: sans-serif; background: #0a1628; color: #fff; }
+    #header {
+      padding: 16px 20px;
+      background: #0d1f3c;
+      border-bottom: 1px solid #1e3a5f;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    #header h1 { font-size: 18px; font-weight: 600; }
+    #header span { font-size: 13px; color: #7a9cc0; }
+    #map { width: 100%; height: calc(100vh - 60px); }
+    #status {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(13,31,60,0.9);
+      border: 1px solid #1e3a5f;
+      border-radius: 8px;
+      padding: 10px 18px;
+      font-size: 13px;
+      color: #7a9cc0;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+
+<div id="header">
+  <span>⛵</span>
+  <h1>Atlantic Sail</h1>
+  <span id="info">Загрузка трека...</span>
+</div>
+
+<div id="map"></div>
+<div id="status">🛰 Загрузка данных...</div>
+
+<script>
+  // ── НАСТРОЙКИ ─────────────────────────────────────────────
+  // Замени SHEET_ID на ID своей таблицы "Atlantic Tracker"
+  // Найти: открой таблицу → URL вида docs.google.com/spreadsheets/d/SHEET_ID/edit
+  const SHEET_ID = "15uqQA-ankTrNN8U52t9E53dlhPHMof0yb5-2_OFpj7Y";
+  const SHEET_NAME = "track";
+  const CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${SHEET_NAME}`;
+  // ─────────────────────────────────────────────────────────
+
+  let map, polyline, marker;
+
+  async function loadTrack() {
+    try {
+      const res = await fetch(CSV_URL);
+      if (!res.ok) throw new Error("Не удалось загрузить CSV");
+      const text = await res.text();
+      const rows = text.trim().split("\n").slice(1); // пропускаем заголовок
+
+      const points = rows
+        .map(row => {
+          // CSV может содержать кавычки
+          const cols = row.replace(/"/g, "").split(",");
+          const lat = parseFloat(cols[1]);
+          const lon = parseFloat(cols[2]);
+          return isNaN(lat) || isNaN(lon) ? null : { lat, lng: lon };
+        })
+        .filter(Boolean);
+
+      if (points.length === 0) {
+        document.getElementById("status").textContent = "📭 Точек пока нет";
+        document.getElementById("info").textContent = "Точек: 0";
+        return;
+      }
+
+      // Трек — линия
+      polyline = new google.maps.Polyline({
+        path: points,
+        geodesic: true,
+        strokeColor: "#4a9eff",
+        strokeOpacity: 0.9,
+        strokeWeight: 3,
+        map,
+      });
+
+      // Последняя точка — маркер
+      const last = points[points.length - 1];
+      marker = new google.maps.Marker({
+        position: last,
+        map,
+        title: "Последняя позиция",
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: 8,
+          fillColor: "#ff6b35",
+          fillOpacity: 1,
+          strokeColor: "#fff",
+          strokeWeight: 2,
+        },
+      });
+
+      // Подогнать вид под трек
+      const bounds = new google.maps.LatLngBounds();
+      points.forEach(p => bounds.extend(p));
+      map.fitBounds(bounds);
+
+      document.getElementById("info").textContent = `Точек: ${points.length}`;
+      document.getElementById("status").textContent =
+        `📍 Последняя: ${last.lat.toFixed(4)}, ${last.lng.toFixed(4)}`;
+
+    } catch (e) {
+      console.error(e);
+      document.getElementById("status").textContent = "❌ Ошибка загрузки трека";
+    }
+  }
+
+  function initMap() {
+    map = new google.maps.Map(document.getElementById("map"), {
+      zoom: 5,
+      center: { lat: 28.1, lng: -15.4 }, // Gran Canaria по умолчанию
+      mapTypeId: "hybrid",
+      styles: [
+        { elementType: "labels.text.fill", stylers: [{ color: "#8ec3e0" }] },
+        { featureType: "water", elementType: "geometry", stylers: [{ color: "#0a1e35" }] },
+      ],
+    });
+    loadTrack();
+  }
+
+  // Автообновление каждые 5 минут
+  setInterval(() => {
+    if (polyline) polyline.setMap(null);
+    if (marker) marker.setMap(null);
+    loadTrack();
+  }, 5 * 60 * 1000);
+</script>
+
+<!--
+  Замени YOUR_GOOGLE_MAPS_API_KEY на свой ключ Google Maps JavaScript API.
+  Получить бесплатно: https://console.cloud.google.com → APIs → Maps JavaScript API
+  Ограничь ключ доменом atlanticsail.net для безопасности.
+-->
+<script
+  src="https://maps.googleapis.com/maps/api/js?key=AIzaSyA5lsK0jjMceIO43iC3v_JS-nec6r1lzig&callback=initMap"
+  async defer>
+</script>
+
+</body>
+</html>
