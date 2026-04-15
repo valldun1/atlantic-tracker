@@ -1,4 +1,6 @@
-import os
+git add bot.py
+git commit -m "Russian lang + /reset command"
+git push origin mainimport os
 import logging
 import json
 import requests
@@ -33,7 +35,7 @@ SYSTEM_PROMPT = (
     "You are expert in: rigging, engine, lithium batteries, solar panels, navigation, "
     "Gibraltar currents, anchorages in Mediterranean, Canaries and Atlantic. "
     "Be concise. Every 4-5 messages add a sea joke or toast. "
-    "Always reply in the same language the user writes in."
+    "Always reply in Russian, regardless of the language the user writes in."
 )
 
 authorized_users: dict = {}
@@ -244,7 +246,18 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(reply, reply_markup=keyboard)
 
 
+async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    authorized_users.pop(user_id, None)
+    conversation_history.pop(user_id, None)
+    paused_users.discard(user_id)
+    await update.message.reply_text(
+        "Session reset. You are now a guest.",
+        reply_markup=guest_keyboard(),
+    )
+
 async def pause(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     paused_users.add(update.effective_user.id)
     await update.message.reply_text("Reminders paused. /resume to enable.")
 
@@ -257,6 +270,7 @@ async def resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("pause", pause))
     app.add_handler(CommandHandler("resume", resume))
     app.add_handler(MessageHandler(filters.LOCATION, handle_location))
