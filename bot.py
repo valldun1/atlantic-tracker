@@ -138,8 +138,7 @@ async def ask_ai(user_id: int, user_message: str) -> str:
 # --- Клавиатура ---
 def geo_keyboard(paused: bool = False):
     geo_btn = KeyboardButton("📍 Поделиться геопозицией", request_location=True)
-    toggle_btn = KeyboardButton("🔔 Включить напоминания" if paused else "🔕 Отключить напоминания")
-    return ReplyKeyboardMarkup([[geo_btn], [toggle_btn]], resize_keyboard=True)
+    return ReplyKeyboardMarkup([[geo_btn]], resize_keyboard=True)
 
 def guest_keyboard():
     return ReplyKeyboardMarkup(
@@ -246,15 +245,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text.strip()
 
-    # Кнопки паузы
-    if text == "🔕 Отключить напоминания":
-        paused_users.add(user_id)
-        await update.message.reply_text("🔕 Напоминания отключены.", reply_markup=geo_keyboard(True))
-        return
-    if text == "🔔 Включить напоминания":
-        paused_users.discard(user_id)
-        await update.message.reply_text("🔔 Напоминания включены.", reply_markup=geo_keyboard(False))
-        return
     if text == "⚓ Спросить AI-капитана":
         await update.message.reply_text("Задай свой вопрос — отвечу! ⚓")
         return
