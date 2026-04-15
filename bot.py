@@ -89,21 +89,23 @@ def ask_groq(user_id, user_message):
         conversation_history[user_id] = history
 
     try:
+        import json as _json
+        body = _json.dumps({
+            "model": "llama-3.3-70b-versatile",
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                *history,
+            ],
+            "max_tokens": 400,
+            "temperature": 0.8,
+        }, ensure_ascii=False).encode("utf-8")
         resp = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={
                 "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json",
+                "Content-Type": "application/json; charset=utf-8",
             },
-            json={
-                "model": "llama-3.3-70b-versatile",
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    *history,
-                ],
-                "max_tokens": 400,
-                "temperature": 0.8,
-            },
+            data=body,
             timeout=30,
         )
         resp.raise_for_status()
