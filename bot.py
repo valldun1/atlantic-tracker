@@ -1,7 +1,7 @@
 import os
 import logging
 from datetime import datetime, timezone, timedelta
-from groq import Groq
+import requests as req_lib
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -29,7 +29,7 @@ GOOGLE_CREDENTIALS_JSON = os.environ["GOOGLE_CREDENTIALS_JSON"]
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 REMINDER_HOURS = int(os.environ.get("REMINDER_HOURS", "3"))
 
-groq_client = Groq(api_key=GROQ_API_KEY)
+# Groq через requests
 
 # --- System prompts (English to avoid encoding issues) ---
 SYSTEM_GUEST = """You are a marine AI assistant for Atlantic Sail yacht charter.
@@ -119,16 +119,27 @@ async def ask_ai(user_id: int, user_message: str) -> str:
         conversation_history[user_id] = history
 
     try:
-        response = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "system", "content": get_system_prompt(user_id).encode("utf-8").decode("utf-8")},
+        payload = {
+            "model": "llama-3.3-70b-versatile",
+            "messages": [
+                {"role": "system", "content": get_system_prompt(user_id)},
                 *history
             ],
-            max_tokens=400,
-            temperature=0.8,
+            "max_tokens": 400,
+            "temperature": 0.8,
+        }
+        headers = {
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json; charset=utf-8",
+        }
+        resp = req_lib.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            json=payload,
+            headers=headers,
+            timeout=30,
         )
-        reply = response.choices[0].message.content
+        resp.raise_for_status()
+        reply = resp.json()["choices"][0]["message"]["content"]
         history.append({"role": "assistant", "content": reply})
         return reply
     except Exception as e:
