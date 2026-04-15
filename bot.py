@@ -1,10 +1,12 @@
 import os
 import logging
 from datetime import datetime, timezone, timedelta
+from groq import Groq
 
 import gspread
 from google.oauth2.service_account import Credentials
 import json
+import random
 
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
@@ -24,13 +26,44 @@ TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 PASSWORD_KOSTYA = os.environ["PASSWORD_KOSTYA"]
 PASSWORD_YURA = os.environ["PASSWORD_YURA"]
 GOOGLE_CREDENTIALS_JSON = os.environ["GOOGLE_CREDENTIALS_JSON"]
+GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 REMINDER_HOURS = int(os.environ.get("REMINDER_HOURS", "3"))
 
-# --- Сессии: user_id → captain name ---
-authorized_users: dict[int, str] = {}
+groq_client = Groq(api_key=GROQ_API_KEY)
 
-# --- Напоминания отключены: user_id ---
+# --- Системные промпты ---
+SYSTEM_GUEST = """Ты морской AI-ассистент на борту яхты Atlantic Sail. 
+Ты эксперт по всему что связано с яхтингом: такелаж, двигатель, литиевые батареи, 
+солнечные панели, навигация, Гибралтар и его течения, якорные стоянки и бухты 
+Средиземноморья, Канарских островов и Атлантики.
+Отвечай коротко и по делу. Иногда (каждые 4-5 сообщений) добавляй морскую шутку 
+или тост. Раз в несколько сообщений упоминай ненавязчиво: 
+"Кстати, если ты капитан Atlantic Sail — можешь отслеживать свой трек через этот бот."
+Общайся на языке собеседника."""
+
+SYSTEM_KOSTYA = """Ты личный AI-ассистент капитана Кости на борту катамарана Lipari 41, 
+Atlantic Sail. Костя — опытный капитан и создатель контента на YouTube (@capitankosta).
+Ты эксперт по всему что связано с яхтингом: такелаж, двигатель, литиевые батареи, 
+солнечные панели, навигация, Гибралтар и его течения, Левант, якорные стоянки и бухты 
+Средиземноморья, Канарских островов и Атлантики. Знаешь специфику катамаранов.
+Отвечай коротко и по делу. Уважай опыт Кости — он сам всё знает, ты его помощник.
+Иногда (каждые 4-5 сообщений) добавляй морскую шутку или тост.
+Общайся на русском."""
+
+SYSTEM_YURA = """Ты личный AI-ассистент капитана Юры на борту яхты Oceanis 473, 
+Atlantic Sail. Юра — чемпион Беларуси по виндсёрфингу и сертифицированный инструктор 
+по парусному спорту. Настоящий профессионал с отличным чувством ветра и воды.
+Ты эксперт по всему что связано с яхтингом: такелаж, двигатель, литиевые батареи, 
+солнечные панели, навигация, Гибралтар и его течения, якорные стоянки и бухты 
+Средиземноморья, Канарских островов и Атлантики.
+Отвечай коротко и по делу. Ненавязчиво отмечай опыт и навыки Юры когда уместно — 
+он заслуживает уважения. Иногда (каждые 4-5 сообщений) добавляй морскую шутку или тост.
+Общайся на русском."""
+
+# --- Сессии ---
+authorized_users: dict[int, str] = {}
 paused_users: set[int] = set()
+conversation_history: dict[int, list] = {}  # user_id → история сообщений
 
 # --- Google Sheets ---
 def get_sheet():
@@ -70,11 +103,55 @@ def get_last_timestamps() -> dict[str, datetime]:
         logger.error(f"get_last_timestamps error: {e}")
         return {}
 
+# --- AI ответ ---
+def get_system_prompt(user_id: int) -> str:
+    captain = authorized_users.get(user_id)
+    if captain == "kostya":
+        return SYSTEM_KOSTYA
+    elif captain == "yura":
+        return SYSTEM_YURA
+    return SYSTEM_GUEST
+
+async def ask_ai(user_id: int, user_message: str) -> str:
+    if user_id not in conversation_history:
+        conversation_history[user_id] = []
+
+    history = conversation_history[user_id]
+    history.append({"role": "user", "content": user_message})
+
+    # Держим последние 10 сообщений
+    if len(history) > 10:
+        history = history[-10:]
+        conversation_history[user_id] = history
+
+    try:
+        response = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": get_system_prompt(user_id)},
+                *history
+            ],
+            max_tokens=400,
+            temperature=0.8,
+        )
+        reply = response.choices[0].message.content
+        history.append({"role": "assistant", "content": reply})
+        return reply
+    except Exception as e:
+        logger.error(f"Groq error: {e}")
+        return "⚓ Связь с AI прервана. Попробуй ещё раз."
+
 # --- Клавиатура ---
 def geo_keyboard(paused: bool = False):
     geo_btn = KeyboardButton("📍 Поделиться геопозицией", request_location=True)
     toggle_btn = KeyboardButton("🔔 Включить напоминания" if paused else "🔕 Отключить напоминания")
     return ReplyKeyboardMarkup([[geo_btn], [toggle_btn]], resize_keyboard=True)
+
+def guest_keyboard():
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton("⚓ Спросить AI-капитана")]],
+        resize_keyboard=True
+    )
 
 # --- Reminder job ---
 async def check_and_remind(context):
@@ -104,11 +181,30 @@ async def check_and_remind(context):
                 text=msg,
                 reply_markup=geo_keyboard(user_id in paused_users),
             )
-            logger.info(f"Reminder sent to {captain} (uid={user_id})")
         except Exception as e:
             logger.error(f"Reminder error for {captain}: {e}")
 
-# --- Live location: запись каждого обновления ---
+# --- Handlers ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id in authorized_users:
+        captain = authorized_users[user_id]
+        await update.message.reply_text(
+            f"✅ Привет, {captain}!\n\n"
+            f"📍 Ручная точка — кнопка ниже\n"
+            f"🛰 Автотрек — 📎 → Геолокация → В реальном времени → 8ч\n"
+            f"💬 Или просто пиши — отвечу на любой вопрос по яхте",
+            reply_markup=geo_keyboard(user_id in paused_users),
+        )
+    else:
+        await update.message.reply_text(
+            "⚓ Привет! Я AI-ассистент Atlantic Sail.\n\n"
+            "Могу помочь с любым вопросом по яхтингу — такелаж, двигатель, навигация, бухты.\n"
+            "Просто пиши!\n\n"
+            "Если ты капитан Atlantic Sail — введи пароль для доступа к треку.",
+            reply_markup=guest_keyboard(),
+        )
+
 async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
@@ -125,100 +221,77 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         append_point(lat, lon, captain)
         if not is_live:
-            # Ручная точка — подтверждаем
             await update.message.reply_text(
                 f"✅ Точка записана\n📍 {lat:.5f}, {lon:.5f}",
                 reply_markup=geo_keyboard(user_id in paused_users),
             )
-        # Live location — пишем тихо, без ответа каждый раз
         logger.info(f"Point saved: {captain} {lat:.5f} {lon:.5f} live={is_live}")
     except Exception as e:
         logger.error(f"Sheets error: {e}")
         if not is_live:
-            await update.message.reply_text(
-                "❌ Ошибка записи. Попробуй ещё раз.",
-                reply_markup=geo_keyboard(user_id in paused_users),
-            )
+            await update.message.reply_text("❌ Ошибка записи. Попробуй ещё раз.")
 
-# --- Live location: обновления (edited_message) ---
 async def handle_edited_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in authorized_users:
         return
-
     location = update.edited_message.location
     if not location:
         return
-
     lat = location.latitude
     lon = location.longitude
     captain = authorized_users[user_id]
-
     try:
         append_point(lat, lon, captain)
         logger.info(f"Live update: {captain} {lat:.5f} {lon:.5f}")
     except Exception as e:
         logger.error(f"Live update error: {e}")
 
-# --- Handlers ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id in authorized_users:
-        captain = authorized_users[user_id]
-        await update.message.reply_text(
-            f"✅ Привет, {captain}!\n\n"
-            f"📍 Ручная точка — кнопка ниже\n"
-            f"🛰 Автотрек — 📎 → Геолокация → В реальном времени → 8ч",
-            reply_markup=geo_keyboard(user_id in paused_users),
-        )
-    else:
-        await update.message.reply_text("🔐 Введи пароль:")
-
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text.strip()
 
-    # Кнопки паузы (работают даже без авторизации — просто игнорируем)
+    # Кнопки паузы
     if text == "🔕 Отключить напоминания":
         paused_users.add(user_id)
-        await update.message.reply_text(
-            "🔕 Напоминания отключены.",
-            reply_markup=geo_keyboard(paused=True),
-        )
+        await update.message.reply_text("🔕 Напоминания отключены.", reply_markup=geo_keyboard(True))
         return
     if text == "🔔 Включить напоминания":
         paused_users.discard(user_id)
-        await update.message.reply_text(
-            "🔔 Напоминания включены.",
-            reply_markup=geo_keyboard(paused=False),
-        )
+        await update.message.reply_text("🔔 Напоминания включены.", reply_markup=geo_keyboard(False))
+        return
+    if text == "⚓ Спросить AI-капитана":
+        await update.message.reply_text("Задай свой вопрос — отвечу! ⚓")
         return
 
-    if user_id in authorized_users:
-        await update.message.reply_text(
-            "Нажми 📍 или запусти автотрек: 📎 → Геолокация → В реальном времени",
-            reply_markup=geo_keyboard(user_id in paused_users),
-        )
-        return
+    # Проверка пароля
+    if user_id not in authorized_users:
+        if text == PASSWORD_KOSTYA:
+            authorized_users[user_id] = "kostya"
+            await update.message.reply_text(
+                "✅ Добро пожаловать, Костя!\n\n"
+                "📍 Ручная точка — кнопка ниже\n"
+                "🛰 Автотрек — 📎 → Геолокация → В реальном времени → 8ч\n"
+                "💬 Пиши любые вопросы по яхте — я рядом",
+                reply_markup=geo_keyboard(False),
+            )
+            return
+        elif text == PASSWORD_YURA:
+            authorized_users[user_id] = "yura"
+            await update.message.reply_text(
+                "✅ Добро пожаловать, Юра!\n\n"
+                "📍 Ручная точка — кнопка ниже\n"
+                "🛰 Автотрек — 📎 → Геолокация → В реальном времени → 8ч\n"
+                "💬 Пиши любые вопросы по яхте — я рядом",
+                reply_markup=geo_keyboard(False),
+            )
+            return
 
-    if text == PASSWORD_KOSTYA:
-        authorized_users[user_id] = "kostya"
-        await update.message.reply_text(
-            "✅ Добро пожаловать, Костя!\n\n"
-            "📍 Ручная точка — кнопка ниже\n"
-            "🛰 Автотрек — 📎 → Геолокация → В реальном времени → 8ч",
-            reply_markup=geo_keyboard(False),
-        )
-    elif text == PASSWORD_YURA:
-        authorized_users[user_id] = "yura"
-        await update.message.reply_text(
-            "✅ Добро пожаловать, Юра!\n\n"
-            "📍 Ручная точка — кнопка ниже\n"
-            "🛰 Автотрек — 📎 → Геолокация → В реальном времени → 8ч",
-            reply_markup=geo_keyboard(False),
-        )
-    else:
-        await update.message.reply_text("❌ Неверный пароль. Попробуй ещё раз:")
+    # AI ответ — для всех (гость и капитаны)
+    await update.message.chat.send_action("typing")
+    reply = await ask_ai(user_id, text)
+    keyboard = geo_keyboard(user_id in paused_users) if user_id in authorized_users else guest_keyboard()
+    await update.message.reply_text(reply, reply_markup=keyboard)
 
 async def pause(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -241,10 +314,9 @@ def main():
     app.add_handler(MessageHandler(filters.UpdateType.EDITED_MESSAGE & filters.LOCATION, handle_edited_location))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    # Проверка каждый час
     app.job_queue.run_repeating(check_and_remind, interval=3600, first=60)
 
-    logger.info("Atlantic Tracker bot v4 started")
+    logger.info("Atlantic Tracker bot v5 started")
     app.run_polling(allowed_updates=["message", "edited_message"])
 
 if __name__ == "__main__":
