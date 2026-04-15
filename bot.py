@@ -1,6 +1,4 @@
-git add bot.py
-git commit -m "Russian lang + /reset command"
-git push origin mainimport os
+import os
 import logging
 import json
 import requests
