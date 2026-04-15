@@ -2,6 +2,7 @@ import os
 import logging
 import json
 import requests
+import asyncio
 from datetime import datetime, timezone, timedelta
 
 import gspread
@@ -238,7 +239,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     await update.message.chat.send_action("typing")
-    reply = ask_groq(user_id, text)
+    reply = await asyncio.to_thread(ask_groq, user_id, text)
     keyboard = captain_keyboard() if user_id in authorized_users else guest_keyboard()
     await update.message.reply_text(reply, reply_markup=keyboard)
 
