@@ -215,9 +215,9 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=captain_keyboard(),
             )
     except Exception as e:
-        logger.error(f"Sheets error: {e}")
+        logger.error(f"Sheets error: {e}", exc_info=True)
         if not is_live:
-            await update.message.reply_text("❌ Ошибка записи. Попробуй ещё раз.")
+            await update.message.reply_text(f"❌ Ошибка записи: {e}")
 
 
 async def handle_edited_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
