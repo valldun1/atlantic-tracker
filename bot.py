@@ -274,11 +274,18 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-    # Всё остальное → AI
+    # Авторизованный капитан — не отвечаем на текст, напоминаем про кнопки
+    if user_id in authorized_users:
+        await update.message.reply_text(
+            "Используй кнопку 📍 для точки или 📎 → Геолокация → В реальном времени для автотрека.",
+            reply_markup=captain_keyboard(),
+        )
+        return
+
+    # Гость → AI
     await update.message.chat.send_action("typing")
     reply = await asyncio.to_thread(ask_groq, user_id, text)
-    keyboard = captain_keyboard() if user_id in authorized_users else guest_keyboard()
-    await update.message.reply_text(reply, reply_markup=keyboard)
+    await update.message.reply_text(reply, reply_markup=guest_keyboard())
 
 
 async def back(update: Update, context: ContextTypes.DEFAULT_TYPE):
